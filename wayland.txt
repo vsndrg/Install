@@ -1,0 +1,4 @@
+sudo pacman -S wayland wayland-protocols wl-clipboard pamixer \
+               qt5-wayland qt6-wayland gtk4 \
+               swaylock swayidle grim slurp mako \
+               hyprland alacritty rofi waybar polkit-kde-agent
