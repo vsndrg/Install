@@ -1,0 +1,275 @@
+Ниже — пошаговый «от и до» рецепт установки Arch Linux в BIOS‑режиме (UEFI на вашем ноуте не работает) с последующим разворачиванием Hyprland. Мы сохраним ваш Windows‑раздел, удалим Ubuntu и установим Arch «чисто».
+
+---
+
+## Внимание и подготовка
+
+1. **Резервная копия важных данных!**
+   Перед любыми операциями с разметкой диска сделайте бэкап нужных файлов.
+
+2. **Загрузочный USB‑накопитель с Arch Linux**
+   Скачайте последний ISO с [https://archlinux.org/download/](https://archlinux.org/download/) и запишите на флешку (например, с помощью `dd` или Rufus в Windows).
+
+3. **Проверка загрузки в BIOS (Legacy)‑режиме**
+   На ноутбуке зайдите в настройки BIOS и убедитесь, что отключён режим UEFI (или включён CSM/Legacy), чтобы флешка стартовала в старом стиле.
+
+4. **Разделы Windows**
+   Предположим, что диск `/dev/sda` содержит:
+
+   * раздел Windows (`/dev/sda1` — EFI или MBR‑разметка, но Windows уже в Legacy)
+   * раздел Ubuntu (`/dev/sda2`, `/dev/sda3` и т. д.)
+     Мы **не** трогаем `/dev/sda1`; все остальные Linux‑разделы сносим.
+
+---
+
+## 1. Загрузка и очистка Ubuntu
+
+1. Загрузитесь с USB и получите root‑консоль (обычно сразу под root’ом).
+
+2. Посмотреть текущую разметку:
+
+   ```bash
+   fdisk -l /dev/sda
+   ```
+
+3. Удалить все Ubuntu‑разделы (кроме Windows‑раздела, например `/dev/sda1`):
+
+   ```bash
+   cfdisk /dev/sda
+   ```
+
+   – Выбираем разделы Ubuntu (`/dev/sda2`, `/dev/sda3` и т. д.) → Delete → Write → Quit.
+
+4. Создать новые разделы под Arch:
+
+   * **/dev/sda2** (root) – ext4, \~30–50 ГБ (или больше)
+   * **/dev/sda3** (swap) – размер ≈ RAM или вдвое меньше
+   * **/dev/sda4** (home) – всё остальное
+
+   В cfdisk: New → указываем размер → Type: Linux (`83`) или Linux swap (`82`) → Write → Quit.
+
+---
+
+## 2. Форматирование и монтирование
+
+```bash
+# Форматируем корень:
+mkfs.ext4 /dev/sda2
+
+# Форматируем swap:
+mkswap /dev/sda3
+swapon /dev/sda3
+
+# Форматируем home:
+mkfs.ext4 /dev/sda4
+
+# Монтируем:
+mount /dev/sda2 /mnt
+mkdir /mnt/home
+mount /dev/sda4 /mnt/home
+```
+
+---
+
+## 3. Установка базовой системы Arch
+
+1. **Выбираем зеркало** (при необходимости правим `/etc/pacman.d/mirrorlist` — но можно пропустить).
+2. **Устанавливаем пакеты**:
+
+   ```bash
+   pacstrap /mnt base linux linux-firmware vim git sudo networkmanager
+   ```
+3. **Генерируем fstab**:
+
+   ```bash
+   genfstab -U /mnt >> /mnt/etc/fstab
+   ```
+4. **Заходим в систему**:
+
+   ```bash
+   arch-chroot /mnt
+   ```
+
+---
+
+## 4. Первоначальная настройка
+
+```bash
+# 4.1 Время и локаль
+ln -sf /usr/share/zoneinfo/Europe/Moscow /etc/localtime
+hwclock --systohc
+
+# Открыть /etc/locale.gen и раскомментировать:
+# en_US.UTF-8 UTF-8
+# ru_RU.UTF-8 UTF-8
+locale-gen
+
+echo "LANG=ru_RU.UTF-8" > /etc/locale.conf
+
+# 4.2 Хостнейм и hosts
+echo "archbox" > /etc/hostname
+cat >> /etc/hosts <<EOF
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   archbox.localdomain archbox
+EOF
+
+# 4.3 Пароль root
+passwd
+
+# 4.4 Создать пользователя
+useradd -m -G wheel youruser
+passwd youruser
+
+# Разрешить sudo для группы wheel:
+sed -i 's/^# %wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /etc/sudoers
+```
+
+---
+
+## 5. Сетевой менеджер и загрузчик
+
+1. **Включаем NetworkManager**:
+
+   ```bash
+   systemctl enable NetworkManager
+   ```
+
+2. **Устанавливаем GRUB в BIOS‑режиме**:
+
+   ```bash
+   pacman -S grub os-prober
+
+   # Устанавливаем в MBR:
+   grub-install --target=i386-pc --recheck /dev/sda
+
+   # Обнаруживаем Windows:
+   os-prober
+
+   # Генерируем конфиг:
+   grub-mkconfig -o /boot/grub/grub.cfg
+   ```
+
+---
+
+## 6. Установка Hyprland и окружения Wayland
+
+1. **Уходим из chroot** и перезагружаемся в новую систему под вашим пользователем:
+
+   ```bash
+   exit
+   umount -R /mnt
+   reboot
+   ```
+
+2. **Подключаемся**, обновляем:
+
+   ```bash
+   sudo pacman -Syu
+   ```
+
+3. **Устанавливаем зависимости Wayland и Hyprland**:
+
+   ```bash
+   sudo pacman -S wayland wayland-protocols wl-clipboard pamixer \
+                  qt5-wayland qt6-wayland gtk4 \
+                  swaylock swayidle grim slurp mako \
+                  hyprland alacritty rofi waybar polkit-kde-agent
+   ```
+
+---
+
+## 7. Конфигурация Hyprland
+
+1. **Создаём структуру**:
+
+   ```bash
+   mkdir -p ~/.config/hypr
+   cd ~/.config/hypr
+   ```
+
+2. **Пример `hyprland.conf`**:
+
+   ```ini
+   ####### Общие настройки #######
+   general {
+     monitor=DP-1,1920x1080@60,0x0
+     # или: auto_detect=yes
+   }
+
+   # Модификатор — Super (Win)
+   binds {
+     SUPER+T,exec,alacritty
+     SUPER+D,exec,rofi -show drun
+     SUPER+Q,kill,active
+   }
+
+   # Навигация как в Vim
+   binds {
+     SUPER+H,dispatch,focusleft
+     SUPER+J,dispatch,focusdown
+     SUPER+K,dispatch,focusup
+     SUPER+L,dispatch,focusright
+
+     SUPER+CTRL+H,dispatch,resizeactiveleft
+     SUPER+CTRL+L,dispatch,resizeactiveright
+     SUPER+CTRL+J,dispatch,resizeactivedown
+     SUPER+CTRL+K,dispatch,resizeactiveup
+   }
+
+   # Float‑правила
+   windowrule = float, class:(Pavucontrol|MPlayer)
+
+   # Автоматические рабочие столы
+   workspace {
+     1: "web"
+     2: "code"
+     3: "chat"
+     4: "media"
+   }
+   ```
+
+3. **Автозапуск фоновых демонов**
+   Создайте `~/.config/hypr/autostart.sh`:
+
+   ```bash
+   #!/bin/bash
+   mako &
+   wl-clipboard &
+   hyprpaper &
+   ```
+
+   И сделайте исполняемым:
+
+   ```bash
+   chmod +x ~/.config/hypr/autostart.sh
+   ```
+
+4. **Авто‑запуск Hyprland**
+   Добавьте в `~/.bash_profile`:
+
+   ```bash
+   if [ -z "$WAYLAND_DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
+     exec Hyprland
+   fi
+   ```
+
+---
+
+## 8. Перезагрузка и первые шаги
+
+1. **Перезагрузите систему** и войдите в TTY1 под вашим пользователем.
+2. Дождитесь запуска Hyprland — и вы окажетесь в чистом tiling‑окружении Wayland, управляемом только клавиатурой.
+
+---
+
+### Поздравляем!
+
+Теперь у вас:
+
+* BIOS‑грузка через GRUB (Windows и Arch)
+* Минимальная Arch-система без лишних пакетов
+* Современный tiling‑композитор Hyprland под Wayland
+* Управление окнами и запуск программ по клавишам, настроенным «как в NeoVim»
+
+Дальше вы можете править `~/.config/hypr/hyprland.conf`, добавлять скрипты автозапуска и настраивать клавиши под себя. Удачи!
